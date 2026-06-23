@@ -18,7 +18,7 @@ agent captures screenshot -> Glassview upload -> verified browser URL -> share t
 Install the skill with the open Agent Skills CLI:
 
 ```bash
-npx skills add instructa/glassview --skill glassview --agent codex -g
+npx skills add regenrek/glassview --skill glassview --agent codex -g
 ```
 
 Use `--agent claude-code` for Claude Code, or omit `-g` for a project-local install.
@@ -26,7 +26,7 @@ Use `--agent claude-code` for Claude Code, or omit `-g` for a project-local inst
 Clone-based fallback:
 
 ```bash
-git clone https://github.com/instructa/glassview.git
+git clone https://github.com/regenrek/glassview.git
 cd glassview
 pnpm install
 pnpm skill:install
@@ -46,7 +46,7 @@ export GLASSVIEW_UPLOAD_TOKEN="your-upload-token"
 Deploy your own backend with Alchemy:
 
 ```bash
-git clone https://github.com/instructa/glassview.git
+git clone https://github.com/regenrek/glassview.git
 cd glassview
 pnpm install
 pnpm setup:deploy

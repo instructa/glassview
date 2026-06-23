@@ -7,19 +7,19 @@ Glassview is most useful when the skill is installed in your agent and pointed a
 Codex:
 
 ```bash
-npx skills add instructa/glassview --skill glassview --agent codex -g
+npx skills add regenrek/glassview --skill glassview --agent codex -g
 ```
 
 Claude Code:
 
 ```bash
-npx skills add instructa/glassview --skill glassview --agent claude-code -g
+npx skills add regenrek/glassview --skill glassview --agent claude-code -g
 ```
 
 List available skills in the repo:
 
 ```bash
-npx skills add instructa/glassview --list
+npx skills add regenrek/glassview --list
 ```
 
 Use `-g` for a global install. Omit it for a project-local install. Add `--copy` if you prefer copied files instead of symlinks.
@@ -27,7 +27,7 @@ Use `-g` for a global install. Omit it for a project-local install. Add `--copy`
 ## Clone-Based Install
 
 ```bash
-git clone https://github.com/instructa/glassview.git
+git clone https://github.com/regenrek/glassview.git
 cd glassview
 pnpm install
 pnpm skill:install

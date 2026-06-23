@@ -11,7 +11,7 @@ Glassview deploys a Cloudflare Worker and R2 bucket through Alchemy.
 ## One-Command Setup
 
 ```bash
-git clone https://github.com/instructa/glassview.git
+git clone https://github.com/regenrek/glassview.git
 cd glassview
 pnpm install
 pnpm setup:deploy
