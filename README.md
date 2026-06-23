@@ -2,7 +2,7 @@
 
 ![Glassview — shareable screenshot links for agent visual proof](public/glassview_banner.webp)
 
-Glassview gives coding agents a comfortable way to turn local screenshots into shareable proof links.
+Glassview gives coding agents a comfortable way to turn local screenshots into encrypted, expiring proof links.
 
 The repo contains two pieces:
 
@@ -12,7 +12,7 @@ The repo contains two pieces:
 The normal flow is:
 
 ```text
-agent captures screenshot -> Glassview upload -> verified browser URL -> share the proof
+agent captures screenshot -> encrypted upload -> expiring viewer URL with #k key -> share the proof
 ```
 
 ## Install The Skill
@@ -55,6 +55,8 @@ pnpm setup:deploy
 ```
 
 Deployment and environment details: [Deploy Guide](docs/DEPLOY.md).
+
+Default sharing is private: screenshots are encrypted before upload, expire after 7 days, and the decrypt key stays in the URL fragment. Use `--public` only for screenshots that are safe to store as public-by-link plaintext.
 
 ## Tell Your Agent
 

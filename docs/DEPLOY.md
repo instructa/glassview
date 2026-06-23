@@ -25,6 +25,8 @@ alchemy deploy --env-file .env.local
 
 The generated upload token is written to `.env.local` and is not printed.
 
+The generated defaults are private: encrypted uploads, 7-day TTL, 30-day maximum TTL, and no public `/latest`.
+
 ## Manual Setup
 
 ```bash
