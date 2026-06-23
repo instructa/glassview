@@ -1,0 +1,12 @@
+.env
+.env.*
+!.env.example
+node_modules/
+dist/
+.wrangler/
+.alchemy/
+.alchemy-remote/
+.alchemy-backups/
+coverage/
+tmp/
+*.log

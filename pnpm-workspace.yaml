@@ -1,0 +1,10 @@
+overrides:
+  miniflare: 4.20260617.1
+  undici: 7.28.0
+  workerd: 1.20260617.1
+  ws: 8.21.0
+
+allowBuilds:
+  esbuild: true
+  sharp: true
+  workerd: true

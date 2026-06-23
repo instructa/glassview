@@ -1,0 +1,25 @@
+title = "glassview betterleaks config"
+
+prefilter = '''
+matchesAny(attributes[?"path"].orValue(""), [
+  r"""(?:^|/)node_modules(?:/.*)?$""",
+  r"""(?:^|/)dist(?:/.*)?$""",
+  r"""(?:^|/)coverage(?:/.*)?$""",
+  r"""(?:^|/)tmp(?:/.*)?$"""
+])
+'''
+
+filter = '''
+containsAny(finding["secret"], [
+  "CHANGEME_GENERATED_BY_SETUP_DEPLOY",
+  "your-upload-token",
+  "your-worker.your-subdomain.workers.dev",
+  "test-token"
+])
+'''
+
+[[rules]]
+id = "private-key-headers"
+description = "Private key material must not be committed"
+regex = '''-----BEGIN (OPENSSH |RSA |EC |DSA )?PRIVATE KEY-----'''
+keywords = ["PRIVATE KEY"]

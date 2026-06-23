@@ -1,0 +1,32 @@
+{
+  "name": "glassview",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc --noEmit",
+    "test": "vitest run",
+    "postinstall": "node scripts/patch-alchemy-cloudflare-response.mjs",
+    "dev": "alchemy dev --env-file .env.local",
+    "deploy": "alchemy deploy --env-file .env.local",
+    "destroy": "alchemy destroy --env-file .env.local",
+    "setup:deploy": "node scripts/setup-deploy.mjs",
+    "skill:install": "node scripts/install-codex-skill.mjs",
+    "hooks:install": "node scripts/install-git-hooks.mjs",
+    "security:check": "./scripts/secleak-check.sh",
+    "security:hooks": "node scripts/hooks/block-forbidden-staged-files.mjs",
+    "upload": "node scripts/upload-file.mjs",
+    "capture:url": "node scripts/capture-url.mjs"
+  },
+  "dependencies": {
+    "alchemy": "0.93.12"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260509.1",
+    "@playwright/test": "^1.60.0",
+    "@types/node": "^25.0.10",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
+  },
+  "packageManager": "pnpm@11.1.1"
+}

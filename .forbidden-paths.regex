@@ -1,0 +1,42 @@
+# Local runtime directories
+(^|/)\\.alchemy/
+(^|/)\\.alchemy-.*/
+(^|/)\\.wrangler/
+(^|/)\\.codex/
+(^|/)\\.claude/
+(^|/)\\.agentrig/
+
+# Environment files
+(^|/)\\.env$
+(^|/)\\.env\\.(?!example$)
+(^|/)\\.envrc$
+
+# Credential files
+(^|/)\\.aws/credentials$
+(^|/)\\.npmrc$
+(^|/)\\.netrc$
+(^|/)\\.git-credentials$
+(^|/)\\.docker/config\\.json$
+
+# Private keys
+\\.pem$
+\\.key$
+\\.p12$
+\\.jks$
+\\.keystore$
+(^|/)id_rsa$
+(^|/)id_ed25519$
+(^|/)id_ecdsa$
+(^|/)id_dsa$
+\\.agekey$
+
+# Infrastructure state
+\\.tfstate($|\\.|/)
+\\.tfplan$
+\\.tfvars$
+
+# Secrets and tokens
+(^|/)secrets\\.json$
+(^|/)tokens\\.json$
+(^|/)credentials\\.json$
+(^|/)service-account.*\\.json$
