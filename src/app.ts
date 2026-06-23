@@ -53,10 +53,22 @@ export async function handleRequest(request: Request, env: GlassviewEnv): Promis
     return uploadScreenshot(request, env);
   }
 
+  const revokeMatch = pathname.match(/^\/api\/screenshots\/([A-Za-z0-9_-]+)\/revoke$/);
+  if (request.method === "POST" && revokeMatch) {
+    return revokeScreenshot(request, env, revokeMatch[1]);
+  }
+
+  const deleteMatch = pathname.match(/^\/api\/screenshots\/([A-Za-z0-9_-]+)$/);
+  if (request.method === "DELETE" && deleteMatch) {
+    return revokeScreenshot(request, env, deleteMatch[1]);
+  }
+
   const viewMatch = pathname.match(/^\/v\/([A-Za-z0-9_-]+)$/);
   if (isRead && viewMatch) {
     const meta = await getMetadata(env, viewMatch[1]);
     if (!meta) return text("Screenshot not found", 404);
+    const unavailable = unavailableResponse(meta);
+    if (unavailable) return unavailable;
     return html(headOnly ? "" : renderViewer(meta));
   }
 
@@ -64,6 +76,11 @@ export async function handleRequest(request: Request, env: GlassviewEnv): Promis
   if (isRead && rawMatch) {
     const meta = await getMetadata(env, rawMatch[1]);
     if (!meta) return text("Screenshot not found", 404);
+    const unavailable = unavailableResponse(meta);
+    if (unavailable) return unavailable;
+    if (meta.mode === "encrypted") {
+      return text("Raw image unavailable for encrypted screenshots", 404);
+    }
     const object = await env.SCREENSHOTS.get(meta.imageKey);
     if (!object) return text("Image not found", 404);
     return new Response(headOnly ? null : object.body, {
@@ -74,15 +91,31 @@ export async function handleRequest(request: Request, env: GlassviewEnv): Promis
     });
   }
 
+  const blobMatch = pathname.match(/^\/blob\/([A-Za-z0-9_-]+)$/);
+  if (isRead && blobMatch) {
+    const meta = await getMetadata(env, blobMatch[1]);
+    if (!meta) return text("Screenshot not found", 404);
+    const unavailable = unavailableResponse(meta);
+    if (unavailable) return unavailable;
+    if (meta.mode !== "encrypted") {
+      return text("Ciphertext blob unavailable for public screenshots", 404);
+    }
+    const object = await env.SCREENSHOTS.get(meta.imageKey);
+    if (!object) return text("Image not found", 404);
+    return new Response(headOnly ? null : object.body, {
+      headers: {
+        "content-type": "application/octet-stream",
+        "cache-control": "private, max-age=3600",
+      },
+    });
+  }
+
   return text("Not found", 404);
 }
 
 async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Response> {
-  const expected = env.GLASSVIEW_UPLOAD_TOKEN;
-  const auth = request.headers.get("authorization") || "";
-  if (!expected || auth !== `Bearer ${expected}`) {
-    return json({ error: "unauthorized" }, 401);
-  }
+  const unauthorized = authorize(request, env);
+  if (unauthorized) return unauthorized;
 
   const input = await readUploadInput(request);
   const config = resolveRuntimeConfig(env);
@@ -147,7 +180,8 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
     createdAt,
     expiresAt,
     viewUrl: `${baseUrl}/v/${id}`,
-    rawUrl: `${baseUrl}/raw/${id}`,
+    rawUrl: mode === "public" ? `${baseUrl}/raw/${id}` : undefined,
+    blobUrl: mode === "encrypted" ? `${baseUrl}/blob/${id}` : undefined,
   };
 
   await env.SCREENSHOTS.put(imageKey, input.bytes, {
@@ -164,10 +198,31 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
     id: meta.id,
     viewUrl: meta.viewUrl,
     rawUrl: meta.rawUrl,
+    blobUrl: meta.blobUrl,
     createdAt: meta.createdAt,
   };
 
   return json(body, 201);
+}
+
+async function revokeScreenshot(
+  request: Request,
+  env: GlassviewEnv,
+  id: string,
+): Promise<Response> {
+  const unauthorized = authorize(request, env);
+  if (unauthorized) return unauthorized;
+
+  const meta = await getMetadata(env, id);
+  if (!meta) return json({ error: "not_found" }, 404);
+
+  const revokedAt = meta.revokedAt || new Date().toISOString();
+  const updated: ScreenshotMetadata = { ...meta, revokedAt };
+  await env.SCREENSHOTS.put(updated.metaKey, JSON.stringify(updated, null, 2), {
+    httpMetadata: { contentType: "application/json; charset=utf-8" },
+  });
+
+  return json({ id, revokedAt });
 }
 
 async function readUploadInput(request: Request): Promise<UploadInput> {
@@ -227,6 +282,23 @@ async function getMetadata(env: GlassviewEnv, id: string): Promise<ScreenshotMet
   const object = await env.SCREENSHOTS.get(`meta/${id}.json`);
   if (!object) return undefined;
   return object.json<ScreenshotMetadata>();
+}
+
+function authorize(request: Request, env: GlassviewEnv): Response | undefined {
+  const expected = env.GLASSVIEW_UPLOAD_TOKEN;
+  const auth = request.headers.get("authorization") || "";
+  if (!expected || auth !== `Bearer ${expected}`) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  return undefined;
+}
+
+function unavailableResponse(meta: ScreenshotMetadata): Response | undefined {
+  if (meta.revokedAt) return text("Screenshot revoked", 410);
+  if (meta.expiresAt && Date.now() >= new Date(meta.expiresAt).getTime()) {
+    return text("Screenshot expired", 410);
+  }
+  return undefined;
 }
 
 function normalizeUploadMode(value: string | undefined, encryptUploads: boolean): "encrypted" | "public" {

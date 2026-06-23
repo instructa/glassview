@@ -27,11 +27,13 @@ export type ScreenshotMetadata = {
   };
   createdAt: string;
   expiresAt?: string;
+  revokedAt?: string;
   viewUrl: string;
-  rawUrl: string;
+  rawUrl?: string;
+  blobUrl?: string;
 };
 
 export type UploadResponse = Pick<
   ScreenshotMetadata,
-  "id" | "viewUrl" | "rawUrl" | "createdAt"
+  "id" | "viewUrl" | "rawUrl" | "blobUrl" | "createdAt"
 >;

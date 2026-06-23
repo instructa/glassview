@@ -22,6 +22,8 @@ export function renderHome(latest?: ScreenshotMetadata): string {
 }
 
 export function renderViewer(meta: ScreenshotMetadata): string {
+  const assetUrl = meta.rawUrl || meta.blobUrl || "#";
+  const buttonLabel = meta.mode === "encrypted" ? "Open blob" : "Open raw";
   const rows = [
     ["Created", meta.createdAt],
     ["Label", meta.label],
@@ -40,10 +42,10 @@ export function renderViewer(meta: ScreenshotMetadata): string {
           <p class="eyebrow">Glassview</p>
           <h1>${escapeHtml(meta.label || meta.id)}</h1>
         </div>
-        <a class="button" href="${escapeHtml(meta.rawUrl)}">Open raw</a>
+        <a class="button" href="${escapeHtml(assetUrl)}">${buttonLabel}</a>
       </header>
       <figure>
-        <img src="${escapeHtml(meta.rawUrl)}" alt="${escapeHtml(meta.label || "Uploaded screenshot")}" />
+        <img src="${escapeHtml(assetUrl)}" alt="${escapeHtml(meta.label || "Uploaded screenshot")}" />
       </figure>
       <dl>
         ${rows

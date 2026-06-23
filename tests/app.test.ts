@@ -67,16 +67,21 @@ describe("glassview worker", () => {
 
     expect(response.status).toBe(201);
     const body = (await response.json()) as UploadResponse;
+    expect(body.blobUrl).toBe(`https://glassview.test/blob/${body.id}`);
+    expect(body.rawUrl).toBeUndefined();
+
     const metaObject = await bucket.get(`meta/${body.id}.json`);
     const meta = await metaObject?.json<{
       mode: string;
       imageKey: string;
+      blobUrl: string;
       contentType: string;
       cipher: { alg: string; iv: string };
     }>();
 
     expect(meta).toMatchObject({
       mode: "encrypted",
+      blobUrl: `https://glassview.test/blob/${body.id}`,
       contentType: "image/png",
       cipher: { alg: "AES-GCM", iv: "test-iv" },
     });
@@ -86,6 +91,14 @@ describe("glassview worker", () => {
     expect(stored?.httpMetadata?.contentType).toBe("application/octet-stream");
     expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(ciphertext);
     expect(new Uint8Array(await stored!.arrayBuffer())).not.toEqual(PNG_BYTES);
+
+    const blob = await handleRequest(new Request(body.blobUrl!), env);
+    expect(blob.status).toBe(200);
+    expect(blob.headers.get("content-type")).toBe("application/octet-stream");
+    expect(new Uint8Array(await blob.arrayBuffer())).toEqual(ciphertext);
+
+    const raw = await handleRequest(new Request(`https://glassview.test/raw/${body.id}`), env);
+    expect(raw.status).toBe(404);
   });
 
   it("requires cipher metadata for encrypted uploads", async () => {
@@ -129,18 +142,68 @@ describe("glassview worker", () => {
 
   it("returns the raw image with the uploaded content type", async () => {
     const uploaded = (await (await upload()).json()) as UploadResponse;
-    const response = await handleRequest(new Request(uploaded.rawUrl), env);
+    expect(uploaded.rawUrl).toBeDefined();
+    const response = await handleRequest(new Request(uploaded.rawUrl!), env);
 
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toBe("image/png");
     expect(new Uint8Array(await response.arrayBuffer())).toEqual(PNG_BYTES);
   });
 
+  it("returns 404 for missing viewer and blob routes", async () => {
+    const view = await handleRequest(new Request("https://glassview.test/v/missing"), env);
+    const blob = await handleRequest(new Request("https://glassview.test/blob/missing"), env);
+
+    expect(view.status).toBe(404);
+    expect(blob.status).toBe(404);
+  });
+
+  it("returns 410 for expired viewer and blob routes", async () => {
+    const uploaded = await uploadEncrypted();
+    await updateMetadata(uploaded.id, {
+      expiresAt: new Date(Date.now() - 1000).toISOString(),
+    });
+
+    const view = await handleRequest(new Request(uploaded.viewUrl), env);
+    const blob = await handleRequest(new Request(uploaded.blobUrl!), env);
+
+    expect(view.status).toBe(410);
+    expect(await view.text()).toBe("Screenshot expired");
+    expect(blob.status).toBe(410);
+  });
+
+  it("revokes screenshots and returns 410 for revoked links", async () => {
+    const uploaded = await uploadEncrypted();
+    const revoke = await handleRequest(
+      new Request(`https://glassview.test/api/screenshots/${uploaded.id}/revoke`, {
+        method: "POST",
+        headers: { authorization: "Bearer test-token" },
+      }),
+      env,
+    );
+
+    expect(revoke.status).toBe(200);
+    const body = (await revoke.json()) as { revokedAt: string };
+    expect(body.revokedAt).toBeDefined();
+
+    const metaObject = await bucket.get(`meta/${uploaded.id}.json`);
+    const meta = await metaObject?.json<{ revokedAt?: string }>();
+    expect(meta?.revokedAt).toBe(body.revokedAt);
+
+    const view = await handleRequest(new Request(uploaded.viewUrl), env);
+    const blob = await handleRequest(new Request(uploaded.blobUrl!), env);
+
+    expect(view.status).toBe(410);
+    expect(await view.text()).toBe("Screenshot revoked");
+    expect(blob.status).toBe(410);
+  });
+
   it("supports HEAD checks for viewer and raw routes", async () => {
     const uploaded = (await (await upload()).json()) as UploadResponse;
 
     const view = await handleRequest(new Request(uploaded.viewUrl, { method: "HEAD" }), env);
-    const raw = await handleRequest(new Request(uploaded.rawUrl, { method: "HEAD" }), env);
+    expect(uploaded.rawUrl).toBeDefined();
+    const raw = await handleRequest(new Request(uploaded.rawUrl!, { method: "HEAD" }), env);
 
     expect(view.status).toBe(200);
     expect(view.headers.get("content-type")).toContain("text/html");
@@ -205,5 +268,34 @@ describe("glassview worker", () => {
       }),
       env,
     );
+  }
+
+  async function uploadEncrypted(): Promise<UploadResponse> {
+    const response = await handleRequest(
+      new Request(
+        "https://glassview.test/api/screenshots?mode=encrypted&contentType=image/png&cipherAlg=AES-GCM&iv=test-iv",
+        {
+          method: "POST",
+          body: Uint8Array.from([0x01, 0x02, 0x03, 0x04, 0x05]),
+          headers: {
+            authorization: "Bearer test-token",
+            "content-type": "application/octet-stream",
+          },
+        },
+      ),
+      env,
+    );
+
+    expect(response.status).toBe(201);
+    return (await response.json()) as UploadResponse;
+  }
+
+  async function updateMetadata(id: string, patch: Record<string, unknown>): Promise<void> {
+    const metaObject = await bucket.get(`meta/${id}.json`);
+    const meta = await metaObject?.json<Record<string, unknown>>();
+    expect(meta).toBeDefined();
+    await bucket.put(`meta/${id}.json`, JSON.stringify({ ...meta, ...patch }, null, 2), {
+      httpMetadata: { contentType: "application/json; charset=utf-8" },
+    });
   }
 });
