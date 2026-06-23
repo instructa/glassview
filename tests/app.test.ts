@@ -48,6 +48,63 @@ describe("glassview worker", () => {
     expect(meta?.expiresAt).toBeDefined();
   });
 
+  it("stores encrypted uploads as ciphertext with cipher metadata", async () => {
+    const ciphertext = Uint8Array.from([0x01, 0x02, 0x03, 0x04, 0x05]);
+    const response = await handleRequest(
+      new Request(
+        "https://glassview.test/api/screenshots?mode=encrypted&contentType=image/png&cipherAlg=AES-GCM&iv=test-iv",
+        {
+          method: "POST",
+          body: ciphertext,
+          headers: {
+            authorization: "Bearer test-token",
+            "content-type": "application/octet-stream",
+          },
+        },
+      ),
+      env,
+    );
+
+    expect(response.status).toBe(201);
+    const body = (await response.json()) as UploadResponse;
+    const metaObject = await bucket.get(`meta/${body.id}.json`);
+    const meta = await metaObject?.json<{
+      mode: string;
+      imageKey: string;
+      contentType: string;
+      cipher: { alg: string; iv: string };
+    }>();
+
+    expect(meta).toMatchObject({
+      mode: "encrypted",
+      contentType: "image/png",
+      cipher: { alg: "AES-GCM", iv: "test-iv" },
+    });
+    expect(meta?.imageKey).toMatch(/\.bin$/);
+
+    const stored = await bucket.get(meta!.imageKey);
+    expect(stored?.httpMetadata?.contentType).toBe("application/octet-stream");
+    expect(new Uint8Array(await stored!.arrayBuffer())).toEqual(ciphertext);
+    expect(new Uint8Array(await stored!.arrayBuffer())).not.toEqual(PNG_BYTES);
+  });
+
+  it("requires cipher metadata for encrypted uploads", async () => {
+    const response = await handleRequest(
+      new Request("https://glassview.test/api/screenshots?mode=encrypted&contentType=image/png", {
+        method: "POST",
+        body: PNG_BYTES,
+        headers: {
+          authorization: "Bearer test-token",
+          "content-type": "application/octet-stream",
+        },
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ error: "invalid_cipher_metadata" });
+  });
+
   it("stores custom ttl metadata for uploads", async () => {
     const uploaded = (await (await upload("ttl=24h")).json()) as UploadResponse;
     const metaObject = await bucket.get(`meta/${uploaded.id}.json`);
@@ -135,9 +192,10 @@ describe("glassview worker", () => {
     expect(await response.json()).toEqual({ ok: true, stage: "unknown" });
   });
 
-  async function upload(query = "label=Example%20screenshot"): Promise<Response> {
+  async function upload(query = "label=Example%20screenshot&mode=public"): Promise<Response> {
+    const uploadQuery = query.includes("mode=") ? query : `${query}&mode=public`;
     return handleRequest(
-      new Request(`https://glassview.test/api/screenshots?${query}`, {
+      new Request(`https://glassview.test/api/screenshots?${uploadQuery}`, {
         method: "POST",
         body: PNG_BYTES,
         headers: {

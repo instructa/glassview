@@ -11,6 +11,7 @@ export type GlassviewEnv = {
 
 export type ScreenshotMetadata = {
   id: string;
+  mode?: "encrypted" | "public";
   label?: string;
   sourceUrl?: string;
   appName?: string;
@@ -20,6 +21,10 @@ export type ScreenshotMetadata = {
   metaKey: string;
   contentType: string;
   size: number;
+  cipher?: {
+    alg: "AES-GCM";
+    iv: string;
+  };
   createdAt: string;
   expiresAt?: string;
   viewUrl: string;

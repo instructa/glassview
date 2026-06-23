@@ -12,6 +12,10 @@ const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 type UploadInput = {
   bytes: ArrayBuffer;
   contentType: string;
+  mode?: string;
+  originalContentType?: string;
+  cipherAlg?: string;
+  iv?: string;
   label?: string;
   sourceUrl?: string;
   appName?: string;
@@ -82,6 +86,12 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
 
   const input = await readUploadInput(request);
   const config = resolveRuntimeConfig(env);
+  let mode: "encrypted" | "public";
+  try {
+    mode = normalizeUploadMode(input.mode, config.encryptUploads);
+  } catch (error) {
+    return json({ error: "invalid_share_mode", message: errorMessage(error) }, 400);
+  }
   let ttlSeconds: number;
   try {
     ttlSeconds = input.ttl
@@ -91,8 +101,19 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
     return json({ error: "invalid_ttl", message: errorMessage(error) }, 400);
   }
 
-  if (!input.contentType.startsWith("image/")) {
+  const storedContentType = mode === "encrypted" ? "application/octet-stream" : input.contentType;
+  const imageContentType = mode === "encrypted" ? input.originalContentType : input.contentType;
+
+  if (!imageContentType?.startsWith("image/")) {
     return json({ error: "unsupported_media_type" }, 415);
+  }
+  if (mode === "encrypted") {
+    if (input.cipherAlg !== "AES-GCM" || !input.iv) {
+      return json({ error: "invalid_cipher_metadata" }, 400);
+    }
+    if (input.contentType !== "application/octet-stream") {
+      return json({ error: "invalid_ciphertext_media_type" }, 415);
+    }
   }
   if (input.bytes.byteLength === 0) {
     return json({ error: "empty_upload" }, 400);
@@ -104,7 +125,7 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
   const id = createId();
   const createdAt = new Date().toISOString();
   const expiresAt = ttlToExpiresAt(createdAt, ttlSeconds);
-  const ext = extensionForContentType(input.contentType);
+  const ext = mode === "encrypted" ? "bin" : extensionForContentType(imageContentType);
   const datePrefix = createdAt.slice(0, 10).replaceAll("-", "/");
   const imageKey = `screenshots/${datePrefix}/${id}.${ext}`;
   const metaKey = `meta/${id}.json`;
@@ -112,6 +133,7 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
 
   const meta: ScreenshotMetadata = {
     id,
+    mode,
     label: input.label,
     sourceUrl: input.sourceUrl,
     appName: input.appName,
@@ -119,8 +141,9 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
     note: input.note,
     imageKey,
     metaKey,
-    contentType: input.contentType,
+    contentType: imageContentType,
     size: input.bytes.byteLength,
+    cipher: mode === "encrypted" ? { alg: "AES-GCM", iv: input.iv! } : undefined,
     createdAt,
     expiresAt,
     viewUrl: `${baseUrl}/v/${id}`,
@@ -128,7 +151,7 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
   };
 
   await env.SCREENSHOTS.put(imageKey, input.bytes, {
-    httpMetadata: { contentType: input.contentType },
+    httpMetadata: { contentType: storedContentType },
   });
   await env.SCREENSHOTS.put(metaKey, JSON.stringify(meta, null, 2), {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
@@ -164,6 +187,10 @@ async function readUploadInput(request: Request): Promise<UploadInput> {
       bytes: await file.arrayBuffer(),
       contentType: file.type || "application/octet-stream",
       label: stringField(form, "label"),
+      mode: stringField(form, "mode"),
+      originalContentType: stringField(form, "contentType"),
+      cipherAlg: stringField(form, "cipherAlg"),
+      iv: stringField(form, "iv"),
       sourceUrl: stringField(form, "sourceUrl"),
       appName: stringField(form, "appName"),
       viewport: stringField(form, "viewport"),
@@ -175,6 +202,10 @@ async function readUploadInput(request: Request): Promise<UploadInput> {
   return {
     bytes: await request.arrayBuffer(),
     contentType: normalizeImageContentType(contentType),
+    mode: url.searchParams.get("mode") || undefined,
+    originalContentType: url.searchParams.get("contentType") || undefined,
+    cipherAlg: url.searchParams.get("cipherAlg") || undefined,
+    iv: url.searchParams.get("iv") || undefined,
     label: url.searchParams.get("label") || undefined,
     sourceUrl: url.searchParams.get("sourceUrl") || undefined,
     appName: url.searchParams.get("appName") || undefined,
@@ -196,6 +227,19 @@ async function getMetadata(env: GlassviewEnv, id: string): Promise<ScreenshotMet
   const object = await env.SCREENSHOTS.get(`meta/${id}.json`);
   if (!object) return undefined;
   return object.json<ScreenshotMetadata>();
+}
+
+function normalizeUploadMode(value: string | undefined, encryptUploads: boolean): "encrypted" | "public" {
+  if (!value) return encryptUploads ? "encrypted" : "public";
+  switch (value) {
+    case "encrypted":
+    case "private":
+      return "encrypted";
+    case "public":
+      return "public";
+    default:
+      throw new Error(`Unsupported upload mode: ${value}`);
+  }
 }
 
 function stringField(form: FormData, name: string): string | undefined {

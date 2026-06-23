@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFile, stat } from "node:fs/promises";
 import { basename } from "node:path";
+import { encryptBytes } from "./lib/encryption.mjs";
 import { applyShareOptions, parseShareOptions } from "./lib/share-options.mjs";
 
 let parsed;
@@ -35,16 +36,32 @@ if (!info.isFile()) {
 
 const bytes = await readFile(file);
 const label = parsed.label || basename(file);
+const originalContentType = contentTypeFor(file);
+const mode = parsed.mode === "public" ? "public" : "encrypted";
 const url = new URL("/api/screenshots", baseUrl);
-applyShareOptions(url, { ...parsed, label });
+applyShareOptions(url, { ...parsed, mode, label });
+
+let uploadBytes = bytes;
+let uploadContentType = originalContentType;
+let fragment = "";
+
+if (mode === "encrypted") {
+  const encrypted = await encryptBytes(bytes);
+  uploadBytes = encrypted.ciphertext;
+  uploadContentType = "application/octet-stream";
+  fragment = `#k=${encrypted.key}`;
+  url.searchParams.set("contentType", originalContentType);
+  url.searchParams.set("cipherAlg", "AES-GCM");
+  url.searchParams.set("iv", encrypted.iv);
+}
 
 const response = await fetch(url, {
   method: "POST",
   headers: {
     authorization: `Bearer ${token}`,
-    "content-type": contentTypeFor(file),
+    "content-type": uploadContentType,
   },
-  body: bytes,
+  body: uploadBytes,
 });
 
 const text = await response.text();
@@ -55,7 +72,7 @@ if (!response.ok) {
 }
 
 const result = JSON.parse(text);
-console.log(result.viewUrl);
+console.log(`${result.viewUrl}${fragment}`);
 
 function contentTypeFor(path) {
   if (path.endsWith(".jpg") || path.endsWith(".jpeg")) return "image/jpeg";
