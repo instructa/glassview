@@ -15,15 +15,15 @@ Glassview turns real screenshot files into browser-openable URLs backed by a Clo
    - Require `GLASSVIEW_UPLOAD_TOKEN`.
 2. Capture or locate a real image file.
 3. Upload the image with `scripts/upload-file.mjs`.
-4. Verify the returned viewer URL with `curl -I` or a browser request.
+4. Verify the returned private viewer URL includes `#k=...` and opens in a browser.
 5. Return the verified `viewUrl`.
 
 Do not claim Glassview proof from an accessibility tree, DOM snapshot, or text output alone. A real image must be uploaded and the returned viewer URL must be checked.
 
 ## Capture Choices
 
-- For browser pages or localhost apps, prefer `scripts/capture-url.mjs <url> [label]`.
-- For an existing local image file, use `scripts/upload-file.mjs <image-file> [label]`.
+- For browser pages or localhost apps, prefer `scripts/capture-url.mjs <url> [label] [--ttl 24h]`.
+- For an existing local image file, use `scripts/upload-file.mjs <image-file> [label] [--ttl 24h]`.
 - For desktop screenshots, first save the screenshot as PNG, JPEG, WebP, GIF, or SVG, then upload that file.
 
 ## Commands
@@ -33,7 +33,7 @@ From a clone of the Glassview repo:
 ```bash
 GLASSVIEW_URL=https://your-worker.your-subdomain.workers.dev \
 GLASSVIEW_UPLOAD_TOKEN=... \
-node skills/glassview/scripts/upload-file.mjs /path/to/screenshot.png "Browser proof"
+node skills/glassview/scripts/upload-file.mjs /path/to/screenshot.png "Browser proof" --ttl 24h
 ```
 
 For localhost/browser capture:
@@ -41,13 +41,14 @@ For localhost/browser capture:
 ```bash
 GLASSVIEW_URL=https://your-worker.your-subdomain.workers.dev \
 GLASSVIEW_UPLOAD_TOKEN=... \
-node skills/glassview/scripts/capture-url.mjs http://localhost:5173/ "Local app"
+node skills/glassview/scripts/capture-url.mjs http://localhost:5173/ "Local app" --ttl 24h
 ```
 
 ## Verification
 
 A successful proof has:
 
-- `POST /api/screenshots` returned JSON with `id`, `viewUrl`, and `rawUrl`.
-- `GET <viewUrl>` returns `200 OK` and an HTML viewer.
+- `POST /api/screenshots` returned JSON with `id`, `viewUrl`, and either encrypted `blobUrl` or explicit public `rawUrl`.
+- private output includes `#k=<decrypt-key>`.
+- `GET <viewUrl>` returns `200 OK` and the browser viewer decrypts the screenshot.
 - The final answer includes the shareable `viewUrl`.

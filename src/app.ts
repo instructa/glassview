@@ -1,8 +1,17 @@
 import { renderHome, renderViewer } from "./html";
+import { parseDuration, resolveRuntimeConfig, ttlToExpiresAt } from "./config";
 import type { GlassviewEnv, ScreenshotMetadata, UploadResponse } from "./types";
 
 const JSON_HEADERS = {
   "content-type": "application/json; charset=utf-8",
+};
+
+const VIEWER_SECURITY_HEADERS = {
+  "x-robots-tag": "noindex, nofollow, noarchive",
+  "referrer-policy": "no-referrer",
+  "cache-control": "no-store",
+  "content-security-policy":
+    "default-src 'none'; img-src 'self' blob: data:; connect-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
 };
 
 const LATEST_KEY = "latest.json";
@@ -11,11 +20,16 @@ const MAX_UPLOAD_BYTES = 10 * 1024 * 1024;
 type UploadInput = {
   bytes: ArrayBuffer;
   contentType: string;
+  mode?: string;
+  originalContentType?: string;
+  cipherAlg?: string;
+  iv?: string;
   label?: string;
   sourceUrl?: string;
   appName?: string;
   viewport?: string;
   note?: string;
+  ttl?: string;
 };
 
 export async function handleRequest(request: Request, env: GlassviewEnv): Promise<Response> {
@@ -25,7 +39,8 @@ export async function handleRequest(request: Request, env: GlassviewEnv): Promis
   const headOnly = request.method === "HEAD";
 
   if (isRead && pathname === "/") {
-    const latest = await getLatest(env);
+    const config = resolveRuntimeConfig(env);
+    const latest = config.latestEnabled ? await getLatest(env) : undefined;
     return html(headOnly ? "" : renderHome(latest));
   }
 
@@ -38,6 +53,11 @@ export async function handleRequest(request: Request, env: GlassviewEnv): Promis
   }
 
   if (isRead && pathname === "/latest") {
+    const config = resolveRuntimeConfig(env);
+    if (!config.latestEnabled) {
+      const unauthorized = authorize(request, env);
+      if (unauthorized) return unauthorized;
+    }
     const latest = await getLatest(env);
     if (!latest) return html(headOnly ? "" : renderHome(), 404);
     return Response.redirect(new URL(latest.viewUrl, request.url).toString(), 302);
@@ -47,17 +67,34 @@ export async function handleRequest(request: Request, env: GlassviewEnv): Promis
     return uploadScreenshot(request, env);
   }
 
+  const revokeMatch = pathname.match(/^\/api\/screenshots\/([A-Za-z0-9_-]+)\/revoke$/);
+  if (request.method === "POST" && revokeMatch) {
+    return revokeScreenshot(request, env, revokeMatch[1]);
+  }
+
+  const deleteMatch = pathname.match(/^\/api\/screenshots\/([A-Za-z0-9_-]+)$/);
+  if (request.method === "DELETE" && deleteMatch) {
+    return revokeScreenshot(request, env, deleteMatch[1]);
+  }
+
   const viewMatch = pathname.match(/^\/v\/([A-Za-z0-9_-]+)$/);
   if (isRead && viewMatch) {
     const meta = await getMetadata(env, viewMatch[1]);
     if (!meta) return text("Screenshot not found", 404);
-    return html(headOnly ? "" : renderViewer(meta));
+    const unavailable = unavailableResponse(meta);
+    if (unavailable) return unavailable;
+    return html(headOnly ? "" : renderViewer(meta), 200, VIEWER_SECURITY_HEADERS);
   }
 
   const rawMatch = pathname.match(/^\/raw\/([A-Za-z0-9_-]+)$/);
   if (isRead && rawMatch) {
     const meta = await getMetadata(env, rawMatch[1]);
     if (!meta) return text("Screenshot not found", 404);
+    const unavailable = unavailableResponse(meta);
+    if (unavailable) return unavailable;
+    if (meta.mode === "encrypted") {
+      return text("Raw image unavailable for encrypted screenshots", 404);
+    }
     const object = await env.SCREENSHOTS.get(meta.imageKey);
     if (!object) return text("Image not found", 404);
     return new Response(headOnly ? null : object.body, {
@@ -68,19 +105,64 @@ export async function handleRequest(request: Request, env: GlassviewEnv): Promis
     });
   }
 
+  const blobMatch = pathname.match(/^\/blob\/([A-Za-z0-9_-]+)$/);
+  if (isRead && blobMatch) {
+    const meta = await getMetadata(env, blobMatch[1]);
+    if (!meta) return text("Screenshot not found", 404);
+    const unavailable = unavailableResponse(meta);
+    if (unavailable) return unavailable;
+    if (meta.mode !== "encrypted") {
+      return text("Ciphertext blob unavailable for public screenshots", 404);
+    }
+    const object = await env.SCREENSHOTS.get(meta.imageKey);
+    if (!object) return text("Image not found", 404);
+    return new Response(headOnly ? null : object.body, {
+      headers: {
+        "content-type": "application/octet-stream",
+        "cache-control": "no-store",
+        "x-robots-tag": "noindex, nofollow, noarchive",
+        "referrer-policy": "no-referrer",
+      },
+    });
+  }
+
   return text("Not found", 404);
 }
 
 async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Response> {
-  const expected = env.GLASSVIEW_UPLOAD_TOKEN;
-  const auth = request.headers.get("authorization") || "";
-  if (!expected || auth !== `Bearer ${expected}`) {
-    return json({ error: "unauthorized" }, 401);
-  }
+  const unauthorized = authorize(request, env);
+  if (unauthorized) return unauthorized;
 
   const input = await readUploadInput(request);
-  if (!input.contentType.startsWith("image/")) {
+  const config = resolveRuntimeConfig(env);
+  let mode: "encrypted" | "public";
+  try {
+    mode = normalizeUploadMode(input.mode, config.encryptUploads);
+  } catch (error) {
+    return json({ error: "invalid_share_mode", message: errorMessage(error) }, 400);
+  }
+  let ttlSeconds: number;
+  try {
+    ttlSeconds = input.ttl
+      ? parseDuration(input.ttl, { maxSeconds: config.maxTtlSeconds, name: "ttl" })
+      : config.defaultTtlSeconds;
+  } catch (error) {
+    return json({ error: "invalid_ttl", message: errorMessage(error) }, 400);
+  }
+
+  const storedContentType = mode === "encrypted" ? "application/octet-stream" : input.contentType;
+  const imageContentType = mode === "encrypted" ? input.originalContentType : input.contentType;
+
+  if (!imageContentType?.startsWith("image/")) {
     return json({ error: "unsupported_media_type" }, 415);
+  }
+  if (mode === "encrypted") {
+    if (input.cipherAlg !== "AES-GCM" || !input.iv) {
+      return json({ error: "invalid_cipher_metadata" }, 400);
+    }
+    if (input.contentType !== "application/octet-stream") {
+      return json({ error: "invalid_ciphertext_media_type" }, 415);
+    }
   }
   if (input.bytes.byteLength === 0) {
     return json({ error: "empty_upload" }, 400);
@@ -91,7 +173,8 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
 
   const id = createId();
   const createdAt = new Date().toISOString();
-  const ext = extensionForContentType(input.contentType);
+  const expiresAt = ttlToExpiresAt(createdAt, ttlSeconds);
+  const ext = mode === "encrypted" ? "bin" : extensionForContentType(imageContentType);
   const datePrefix = createdAt.slice(0, 10).replaceAll("-", "/");
   const imageKey = `screenshots/${datePrefix}/${id}.${ext}`;
   const metaKey = `meta/${id}.json`;
@@ -99,22 +182,26 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
 
   const meta: ScreenshotMetadata = {
     id,
-    label: input.label,
-    sourceUrl: input.sourceUrl,
-    appName: input.appName,
-    viewport: input.viewport,
-    note: input.note,
+    mode,
+    label: mode === "public" ? input.label : undefined,
+    sourceUrl: mode === "public" ? input.sourceUrl : undefined,
+    appName: mode === "public" ? input.appName : undefined,
+    viewport: mode === "public" ? input.viewport : undefined,
+    note: mode === "public" ? input.note : undefined,
     imageKey,
     metaKey,
-    contentType: input.contentType,
+    contentType: imageContentType,
     size: input.bytes.byteLength,
+    cipher: mode === "encrypted" ? { alg: "AES-GCM", iv: input.iv! } : undefined,
     createdAt,
+    expiresAt,
     viewUrl: `${baseUrl}/v/${id}`,
-    rawUrl: `${baseUrl}/raw/${id}`,
+    rawUrl: mode === "public" ? `${baseUrl}/raw/${id}` : undefined,
+    blobUrl: mode === "encrypted" ? `${baseUrl}/blob/${id}` : undefined,
   };
 
   await env.SCREENSHOTS.put(imageKey, input.bytes, {
-    httpMetadata: { contentType: input.contentType },
+    httpMetadata: { contentType: storedContentType },
   });
   await env.SCREENSHOTS.put(metaKey, JSON.stringify(meta, null, 2), {
     httpMetadata: { contentType: "application/json; charset=utf-8" },
@@ -127,10 +214,31 @@ async function uploadScreenshot(request: Request, env: GlassviewEnv): Promise<Re
     id: meta.id,
     viewUrl: meta.viewUrl,
     rawUrl: meta.rawUrl,
+    blobUrl: meta.blobUrl,
     createdAt: meta.createdAt,
   };
 
   return json(body, 201);
+}
+
+async function revokeScreenshot(
+  request: Request,
+  env: GlassviewEnv,
+  id: string,
+): Promise<Response> {
+  const unauthorized = authorize(request, env);
+  if (unauthorized) return unauthorized;
+
+  const meta = await getMetadata(env, id);
+  if (!meta) return json({ error: "not_found" }, 404);
+
+  const revokedAt = meta.revokedAt || new Date().toISOString();
+  const updated: ScreenshotMetadata = { ...meta, revokedAt };
+  await env.SCREENSHOTS.put(updated.metaKey, JSON.stringify(updated, null, 2), {
+    httpMetadata: { contentType: "application/json; charset=utf-8" },
+  });
+
+  return json({ id, revokedAt });
 }
 
 async function readUploadInput(request: Request): Promise<UploadInput> {
@@ -150,21 +258,31 @@ async function readUploadInput(request: Request): Promise<UploadInput> {
       bytes: await file.arrayBuffer(),
       contentType: file.type || "application/octet-stream",
       label: stringField(form, "label"),
+      mode: stringField(form, "mode"),
+      originalContentType: stringField(form, "contentType"),
+      cipherAlg: stringField(form, "cipherAlg"),
+      iv: stringField(form, "iv"),
       sourceUrl: stringField(form, "sourceUrl"),
       appName: stringField(form, "appName"),
       viewport: stringField(form, "viewport"),
       note: stringField(form, "note"),
+      ttl: stringField(form, "ttl"),
     };
   }
 
   return {
     bytes: await request.arrayBuffer(),
     contentType: normalizeImageContentType(contentType),
+    mode: url.searchParams.get("mode") || undefined,
+    originalContentType: url.searchParams.get("contentType") || undefined,
+    cipherAlg: url.searchParams.get("cipherAlg") || undefined,
+    iv: url.searchParams.get("iv") || undefined,
     label: url.searchParams.get("label") || undefined,
     sourceUrl: url.searchParams.get("sourceUrl") || undefined,
     appName: url.searchParams.get("appName") || undefined,
     viewport: url.searchParams.get("viewport") || undefined,
     note: url.searchParams.get("note") || undefined,
+    ttl: url.searchParams.get("ttl") || undefined,
   };
 }
 
@@ -180,6 +298,36 @@ async function getMetadata(env: GlassviewEnv, id: string): Promise<ScreenshotMet
   const object = await env.SCREENSHOTS.get(`meta/${id}.json`);
   if (!object) return undefined;
   return object.json<ScreenshotMetadata>();
+}
+
+function authorize(request: Request, env: GlassviewEnv): Response | undefined {
+  const expected = env.GLASSVIEW_UPLOAD_TOKEN;
+  const auth = request.headers.get("authorization") || "";
+  if (!expected || auth !== `Bearer ${expected}`) {
+    return json({ error: "unauthorized" }, 401);
+  }
+  return undefined;
+}
+
+function unavailableResponse(meta: ScreenshotMetadata): Response | undefined {
+  if (meta.revokedAt) return text("Screenshot revoked", 410);
+  if (meta.expiresAt && Date.now() >= new Date(meta.expiresAt).getTime()) {
+    return text("Screenshot expired", 410);
+  }
+  return undefined;
+}
+
+function normalizeUploadMode(value: string | undefined, encryptUploads: boolean): "encrypted" | "public" {
+  if (!value) return encryptUploads ? "encrypted" : "public";
+  switch (value) {
+    case "encrypted":
+    case "private":
+      return "encrypted";
+    case "public":
+      return "public";
+    default:
+      throw new Error(`Unsupported upload mode: ${value}`);
+  }
 }
 
 function stringField(form: FormData, name: string): string | undefined {
@@ -212,10 +360,14 @@ function createId(): string {
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-function html(body: string, status = 200): Response {
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function html(body: string, status = 200, headers: HeadersInit = {}): Response {
   return new Response(body, {
     status,
-    headers: { "content-type": "text/html; charset=utf-8" },
+    headers: { "content-type": "text/html; charset=utf-8", ...headers },
   });
 }
 

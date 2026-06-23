@@ -6,6 +6,7 @@
   "scripts": {
     "build": "tsc --noEmit",
     "test": "vitest run",
+    "verify:private": "vitest run tests/private-flow.test.ts",
     "postinstall": "node scripts/patch-alchemy-cloudflare-response.mjs",
     "dev": "alchemy dev --env-file .env.local",
     "deploy": "alchemy deploy --env-file .env.local",

@@ -26,7 +26,7 @@ fi
 
 if command -v trivy >/dev/null 2>&1; then
   echo "Running trivy secret/misconfig scan..."
-  if trivy fs --scanners secret,misconfig --exit-code 1 --quiet .; then
+  if trivy fs --scanners secret,misconfig --skip-dirs node_modules --exit-code 1 --quiet .; then
     echo "trivy secret/misconfig scan: OK"
   else
     echo "trivy secret/misconfig scan: FAIL"
@@ -34,7 +34,7 @@ if command -v trivy >/dev/null 2>&1; then
   fi
 
   echo "Running trivy vulnerability scan (HIGH/CRITICAL)..."
-  if trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --exit-code 1 --quiet .; then
+  if trivy fs --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --skip-dirs node_modules --exit-code 1 --quiet .; then
     echo "trivy vulnerability scan: OK"
   else
     echo "trivy vulnerability scan: FAIL"

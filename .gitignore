@@ -24,6 +24,12 @@ playwright-report/
 .alchemy-*/
 .alchemy-backups/
 .miniflare/
+.planr/
+.claude/
+.codex/
+plandb.db
+plandb.db-shm
+plandb.db-wal
 
 # Temporary screenshots and generated proof artifacts
 tmp/

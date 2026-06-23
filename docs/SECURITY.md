@@ -1,6 +1,6 @@
 # Security
 
-Glassview is intended for visual proof links. Treat every uploaded screenshot as shareable with anyone who has the URL.
+Glassview is intended for visual proof links. By default, screenshots are encrypted before upload, expire, and decrypt in the browser with a URL-fragment key.
 
 ## Token Handling
 
@@ -9,9 +9,27 @@ Glassview is intended for visual proof links. Treat every uploaded screenshot as
 - Rotate the upload token if it is exposed.
 - Prefer a dedicated Cloudflare API token scoped to the account/resources needed by Alchemy.
 
-## Public Reads
+## Private Links
 
-Screenshot viewer URLs are unguessable but public. Do not upload private customer data, credentials, tokens, or sensitive internal screens unless that sharing model is acceptable.
+Private links are still bearer links: anyone with the full URL, including `#k=...`, can view the screenshot until it expires or is revoked. The Worker, R2 bucket, Cloudflare logs, and normal HTTP request logs do not receive the fragment key, so stored screenshot bytes are ciphertext.
+
+Defaults:
+
+- `GLASSVIEW_SHARE_MODE=private`
+- `GLASSVIEW_DEFAULT_TTL=7d`
+- `GLASSVIEW_MAX_TTL=30d`
+- `GLASSVIEW_ENABLE_LATEST=false`
+- `GLASSVIEW_ENCRYPT_UPLOADS=true`
+
+Private mode omits plaintext labels, source URLs, app names, viewport values, and notes from stored metadata.
+
+## Public Mode
+
+Use `--public` only for screenshots that are safe to store as plaintext and share as public-by-link content. Public mode returns `rawUrl`.
+
+## Team Mode
+
+`GLASSVIEW_SHARE_MODE=team` is reserved for deployments that put Cloudflare Access or equivalent team controls in front of the Worker. It is intentionally not the default because it adds recipient login friction.
 
 ## Repository Guardrails
 
